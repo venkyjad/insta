@@ -135,3 +135,69 @@ export interface RepurposedContent {
   targetLanguage?: string;
   createdAt: number;
 }
+
+// Profile Analytics Types
+
+export interface HashtagAnalysis {
+  hashtag: string;
+  frequency: number;
+  avgLikes: number;
+  avgViews: number;
+  avgComments: number;
+  engagementRate: number;
+}
+
+export interface CaptionAnalysis {
+  avgLength: number;
+  avgWordCount: number;
+  topKeywords: string[];
+  captionStyle: 'short' | 'medium' | 'long';
+  emojiUsage: number;
+  questionUsage: number;
+  callToActionUsage: number;
+}
+
+export interface TranscriptAnalysis {
+  avgLength: number;
+  topTopics: string[];
+  sentimentScore: number; // -1 to 1
+  paceStyle: 'fast' | 'medium' | 'slow';
+  keyPhrases: string[];
+}
+
+export interface PostTimeAnalysis {
+  bestHour: number;
+  bestDayOfWeek: number;
+  avgEngagementByHour: Record<number, number>;
+  avgEngagementByDay: Record<number, number>;
+}
+
+export interface EngagementMetrics {
+  avgLikes: number;
+  avgViews: number;
+  avgComments: number;
+  totalEngagement: number;
+  engagementRate: number;
+  bestPerformingReel: string; // reel ID
+  worstPerformingReel: string; // reel ID
+}
+
+export interface ProfileAnalytics {
+  userId: string;
+  username: string;
+  profileUrl: string;
+  profilePicture?: string;
+  totalReelsAnalyzed: number;
+  topReels: InstagramReelWithTranscript[];
+  hashtagAnalysis: HashtagAnalysis[];
+  captionAnalysis: CaptionAnalysis;
+  transcriptAnalysis: TranscriptAnalysis;
+  postTimeAnalysis: PostTimeAnalysis;
+  engagementMetrics: EngagementMetrics;
+  lastAnalyzedAt: number;
+}
+
+export interface ProfileAnalyticsResponse extends ProfileAnalytics {
+  insights: string[];
+  recommendations: string[];
+}

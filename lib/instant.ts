@@ -62,6 +62,17 @@ type Schema = {
     targetLanguage?: string;
     createdAt: number;
   };
+  analyzedProfiles: {
+    id: string;
+    userId: string;
+    username: string;
+    profileUrl: string;
+    profilePicture?: string;
+    totalReelsAnalyzed: number;
+    topReels: any[]; // Array of InstagramReel objects
+    lastAnalyzedAt: number;
+    createdAt: number;
+  };
 };
 
 const db = init<Schema>({ appId: APP_ID });

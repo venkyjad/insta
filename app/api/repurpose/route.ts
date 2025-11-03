@@ -9,6 +9,17 @@ const openai = new OpenAI({
 
 export async function POST(request: NextRequest) {
   try {
+    // Check if OpenAI API key is configured
+    if (!process.env.OPENAI_API_KEY) {
+      return NextResponse.json<ErrorResponse>(
+        {
+          error: 'OpenAI API key not configured',
+          message: 'Please set OPENAI_API_KEY in your environment variables (.env.local file)'
+        },
+        { status: 500 }
+      );
+    }
+
     const body: RepurposingRequest = await request.json();
 
     const {
@@ -43,24 +54,78 @@ export async function POST(request: NextRequest) {
     );
 
     // Call OpenAI
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-4',
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: userPrompt },
-      ],
-      temperature: 0.7,
-      max_tokens: 2000,
-    });
+    let completion;
+    try {
+      completion = await openai.chat.completions.create({
+        model: 'gpt-4',
+        messages: [
+          { role: 'system', content: systemPrompt },
+          { role: 'user', content: userPrompt },
+        ],
+        temperature: 0.7,
+        max_tokens: 2000,
+      });
+    } catch (openaiError: any) {
+      console.error('OpenAI API error:', openaiError);
+
+      // Handle specific OpenAI errors
+      if (openaiError?.status === 401) {
+        return NextResponse.json<ErrorResponse>(
+          {
+            error: 'Invalid OpenAI API key',
+            message: 'Your OpenAI API key is invalid. Please check your .env.local file.'
+          },
+          { status: 500 }
+        );
+      }
+
+      if (openaiError?.status === 429) {
+        return NextResponse.json<ErrorResponse>(
+          {
+            error: 'OpenAI rate limit exceeded',
+            message: 'You have exceeded your OpenAI API quota. Please check your billing at https://platform.openai.com/account/billing'
+          },
+          { status: 429 }
+        );
+      }
+
+      return NextResponse.json<ErrorResponse>(
+        {
+          error: 'OpenAI API error',
+          message: openaiError?.message || 'Failed to communicate with OpenAI'
+        },
+        { status: 500 }
+      );
+    }
 
     const generatedContent = completion.choices[0]?.message?.content;
 
     if (!generatedContent) {
-      throw new Error('Failed to generate content from OpenAI');
+      return NextResponse.json<ErrorResponse>(
+        {
+          error: 'Empty response from OpenAI',
+          message: 'OpenAI returned an empty response. Please try again.'
+        },
+        { status: 500 }
+      );
     }
 
     // Parse the structured response
-    const parsedContent = parseGeneratedContent(generatedContent, visualPreference);
+    let parsedContent;
+    try {
+      parsedContent = parseGeneratedContent(generatedContent, visualPreference);
+    } catch (parseError) {
+      console.error('Failed to parse AI response:', parseError);
+      console.log('Raw AI response:', generatedContent);
+
+      return NextResponse.json<ErrorResponse>(
+        {
+          error: 'Failed to parse AI response',
+          message: 'The AI returned an invalid format. Please try again with different settings.'
+        },
+        { status: 500 }
+      );
+    }
 
     return NextResponse.json(parsedContent, { status: 200 });
   } catch (error) {

@@ -3,7 +3,8 @@
 import { useState } from 'react';
 import db from '@/lib/instant';
 import ReelDetailView from './ReelDetailView';
-import type { ProfileTopReelsResponse, TranscriptResponse, InstagramReel } from '@/lib/types';
+import ProfileAnalyticsView from './ProfileAnalyticsView';
+import type { ProfileTopReelsResponse, TranscriptResponse, InstagramReel, InstagramReelWithTranscript } from '@/lib/types';
 
 interface TopReelsDisplayProps {
   data: ProfileTopReelsResponse;
@@ -13,8 +14,11 @@ export default function TopReelsDisplay({ data }: TopReelsDisplayProps) {
   const { user } = db.useAuth();
   const { data: savedReelsData } = db.useQuery({ savedReels: {} });
   const savedReels = savedReelsData?.savedReels || [];
-  
+
   const [selectedReel, setSelectedReel] = useState<InstagramReel | null>(null);
+  const [showAnalytics, setShowAnalytics] = useState(false);
+  const [loadingTranscripts, setLoadingTranscripts] = useState(false);
+  const [reelsWithTranscripts, setReelsWithTranscripts] = useState<InstagramReelWithTranscript[]>([]);
 
   // Debug: Log thumbnail URLs
   console.log('Reels data:', data.topReels.map(r => ({ id: r.id, thumbnail: r.thumbnail })));
@@ -26,15 +30,81 @@ export default function TopReelsDisplay({ data }: TopReelsDisplayProps) {
     return num.toString();
   };
 
+  const handleViewAnalytics = async () => {
+    if (!user) return;
+
+    setLoadingTranscripts(true);
+
+    try {
+      // Fetch transcripts for all top reels in parallel
+      const reelsWithTranscriptsPromises = data.topReels.map(async (reel) => {
+        try {
+          const response = await fetch(`/api/reel-transcript?url=${encodeURIComponent(reel.url)}`);
+          if (response.ok) {
+            const transcript = await response.json();
+            return { ...reel, transcript };
+          }
+        } catch (error) {
+          console.error(`Failed to fetch transcript for reel ${reel.id}:`, error);
+        }
+        return reel;
+      });
+
+      const results = await Promise.all(reelsWithTranscriptsPromises);
+      setReelsWithTranscripts(results);
+      setShowAnalytics(true);
+    } catch (error) {
+      console.error('Error fetching transcripts:', error);
+      // Show analytics anyway with whatever data we have
+      setReelsWithTranscripts(data.topReels);
+      setShowAnalytics(true);
+    } finally {
+      setLoadingTranscripts(false);
+    }
+  };
+
+  if (showAnalytics && user) {
+    return (
+      <ProfileAnalyticsView
+        username={data.username}
+        topReels={reelsWithTranscripts}
+        userId={user.id}
+        profileUrl={data.profileUrl}
+        onClose={() => setShowAnalytics(false)}
+      />
+    );
+  }
+
   return (
     <div className="w-full max-w-7xl mt-8">
-      <div className="mb-6">
-        <h2 className="text-2xl font-bold text-white mb-2">
-          Top 5 Reels from @{data.username}
-        </h2>
-        <p className="text-neutral-400 text-sm">
-          Analyzed {data.totalReelsAnalyzed} reels • Sorted by: 1️⃣ Views, 2️⃣ Comments, 3️⃣ Likes
-        </p>
+      <div className="mb-6 flex items-center justify-between">
+        <div>
+          <h2 className="text-2xl font-bold text-white mb-2">
+            Top 5 Reels from @{data.username}
+          </h2>
+          <p className="text-neutral-400 text-sm">
+            Analyzed {data.totalReelsAnalyzed} reels • Sorted by: 1️⃣ Views, 2️⃣ Comments, 3️⃣ Likes
+          </p>
+        </div>
+        <button
+          onClick={handleViewAnalytics}
+          disabled={loadingTranscripts}
+          className="px-6 py-3 bg-gradient-to-r from-blue-600 to-purple-600 text-white font-semibold rounded-lg hover:from-blue-500 hover:to-purple-500 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+        >
+          {loadingTranscripts ? (
+            <>
+              <div className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+              Analyzing...
+            </>
+          ) : (
+            <>
+              <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 20 20">
+                <path d="M2 11a1 1 0 011-1h2a1 1 0 011 1v5a1 1 0 01-1 1H3a1 1 0 01-1-1v-5zM8 7a1 1 0 011-1h2a1 1 0 011 1v9a1 1 0 01-1 1H9a1 1 0 01-1-1V7zM14 4a1 1 0 011-1h2a1 1 0 011 1v12a1 1 0 01-1 1h-2a1 1 0 01-1-1V4z" />
+              </svg>
+              View Full Analytics
+            </>
+          )}
+        </button>
       </div>
 
       {/* Split View Layout */}
@@ -87,7 +157,9 @@ export default function TopReelsDisplay({ data }: TopReelsDisplayProps) {
                     {/* Reel Info */}
                     <div className="flex-1 min-w-0">
                       <p className="text-sm text-neutral-300 line-clamp-2 mb-1">
-                        {reel.caption || 'No caption'}
+                        {typeof reel.caption === 'string'
+                          ? reel.caption
+                          : (reel.caption ? JSON.stringify(reel.caption) : 'No caption')}
                       </p>
                       <div className="flex items-center gap-3 text-xs text-neutral-500">
                         <span className="flex items-center gap-1">

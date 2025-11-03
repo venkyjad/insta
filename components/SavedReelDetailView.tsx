@@ -3,6 +3,8 @@
 import { useState } from 'react';
 import db from '@/lib/instant';
 import TranscriptTranslator from './TranscriptTranslator';
+import RepurposingWizard from './RepurposingWizard';
+import type { RepurposingFormData } from '@/lib/types';
 
 interface SavedReelDetailViewProps {
   reel: any;
@@ -10,8 +12,16 @@ interface SavedReelDetailViewProps {
   onDelete: (reelId: string) => void;
 }
 
+type Tab = 'details' | 'repurpose';
+
 export default function SavedReelDetailView({ reel, onClose, onDelete }: SavedReelDetailViewProps) {
+  const { user } = db.useAuth();
   const [isDeleting, setIsDeleting] = useState(false);
+  const [activeTab, setActiveTab] = useState<Tab>('details');
+  const [showRepurposeWizard, setShowRepurposeWizard] = useState(false);
+  const [isRepurposing, setIsRepurposing] = useState(false);
+  const [repurposedContent, setRepurposedContent] = useState<any>(null);
+  const [repurposingError, setRepurposingError] = useState<string | null>(null);
 
   const thumbnailUrl = reel.thumbnail 
     ? `/api/image-proxy?url=${encodeURIComponent(reel.thumbnail)}`
@@ -39,11 +49,74 @@ export default function SavedReelDetailView({ reel, onClose, onDelete }: SavedRe
     onClose();
   };
 
+  const handleRepurpose = async (formData: RepurposingFormData) => {
+    if (!user) {
+      setRepurposingError('Please sign in to repurpose content');
+      return;
+    }
+
+    setIsRepurposing(true);
+    setRepurposingError(null);
+
+    try {
+      const response = await fetch('/api/repurpose', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          ...formData,
+          originalTranscript: reel.transcript,
+          originalCaption: typeof reel.caption === 'string' ? reel.caption : '',
+          originalHashtags: Array.isArray(reel.hashtags) ? reel.hashtags.filter((tag: any) => typeof tag === 'string') : [],
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => null);
+        throw new Error(errorData?.error || `Failed to generate content: ${response.status}`);
+      }
+
+      const data = await response.json();
+      setRepurposedContent(data);
+
+      // Save to database
+      const newRepurposedContent = {
+        id: crypto.randomUUID(),
+        userId: user.id,
+        originalReelId: reel.reelId || reel.id,
+        goal: formData.goal,
+        targetPlatform: formData.targetPlatform,
+        tone: formData.tone,
+        visualPreference: formData.visualPreference,
+        generatedScript: data.script,
+        generatedCaption: data.caption,
+        suggestedHashtags: data.hashtags,
+        visualSuggestions: data.visualSuggestions,
+        thumbnailIdeas: data.thumbnailIdeas,
+        bRollSuggestions: data.bRollSuggestions,
+        carouselSlides: data.carouselSlides,
+        duration: data.duration,
+        targetLanguage: formData.targetLanguage,
+        createdAt: Date.now(),
+      };
+
+      await db.transact([
+        db.tx.repurposedContent[newRepurposedContent.id].update(newRepurposedContent),
+      ]);
+
+      setShowRepurposeWizard(false);
+    } catch (error: any) {
+      console.error('Repurposing error:', error);
+      setRepurposingError(error.message || 'Failed to generate repurposed content');
+    } finally {
+      setIsRepurposing(false);
+    }
+  };
+
   return (
     <div className="flex flex-col h-full bg-black">
       {/* Header */}
-      <div className="flex-shrink-0 border-b border-neutral-800 bg-neutral-900 p-4">
-        <div className="flex items-center justify-between">
+      <div className="flex-shrink-0 border-b border-neutral-800 bg-neutral-900">
+        <div className="p-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <button
               onClick={onClose}
@@ -95,12 +168,40 @@ export default function SavedReelDetailView({ reel, onClose, onDelete }: SavedRe
             </button>
           </div>
         </div>
+
+        {/* Tabs */}
+        <div className="flex border-t border-neutral-800">
+          <button
+            onClick={() => setActiveTab('details')}
+            className={`flex-1 px-4 py-3 text-sm font-medium transition-all ${
+              activeTab === 'details'
+                ? 'text-white border-b-2 border-blue-500'
+                : 'text-neutral-400 hover:text-neutral-300'
+            }`}
+          >
+            Details
+          </button>
+          <button
+            onClick={() => setActiveTab('repurpose')}
+            className={`flex-1 px-4 py-3 text-sm font-medium transition-all ${
+              activeTab === 'repurpose'
+                ? 'text-white border-b-2 border-blue-500'
+                : 'text-neutral-400 hover:text-neutral-300'
+            }`}
+            disabled={!reel.transcript}
+            title={!reel.transcript ? 'Transcript required for repurposing' : ''}
+          >
+            Repurpose {!reel.transcript && '(No Transcript)'}
+          </button>
+        </div>
       </div>
 
       {/* Content Area */}
       <div className="flex-1 overflow-y-auto">
-        {/* Thumbnail and Stats */}
-        <div className="p-6 border-b border-neutral-800">
+        {activeTab === 'details' ? (
+          <>
+            {/* Thumbnail and Stats */}
+            <div className="p-6 border-b border-neutral-800">
           <div className="flex gap-4">
             {/* Thumbnail */}
             <div className="flex-shrink-0">
@@ -125,7 +226,9 @@ export default function SavedReelDetailView({ reel, onClose, onDelete }: SavedRe
             {/* Caption and Stats */}
             <div className="flex-1">
               <p className="text-neutral-300 text-sm mb-3 line-clamp-3">
-                {reel.caption || 'No caption'}
+                {typeof reel.caption === 'string'
+                  ? reel.caption
+                  : (reel.caption ? JSON.stringify(reel.caption) : 'No caption')}
               </p>
               <div className="flex items-center gap-4 text-xs text-neutral-500 mb-2">
                 <span className="flex items-center gap-1">
@@ -148,13 +251,13 @@ export default function SavedReelDetailView({ reel, onClose, onDelete }: SavedRe
                   {formatNumber(reel.likesCount)} likes
                 </span>
               </div>
-              {reel.hashtags && reel.hashtags.length > 0 && (
+              {reel.hashtags && Array.isArray(reel.hashtags) && reel.hashtags.length > 0 && (
                 <div className="mb-2">
                   <p className="text-xs text-neutral-500 mb-1">Hashtags:</p>
                   <div className="flex flex-wrap gap-1">
-                    {reel.hashtags.map((tag: string, idx: number) => (
+                    {reel.hashtags.map((tag: any, idx: number) => (
                       <span key={idx} className="px-2 py-0.5 bg-neutral-900 text-neutral-400 text-xs rounded">
-                        #{tag}
+                        #{typeof tag === 'string' ? tag : (tag.headline || tag.keyPoints || JSON.stringify(tag))}
                       </span>
                     ))}
                   </div>
@@ -209,13 +312,185 @@ export default function SavedReelDetailView({ reel, onClose, onDelete }: SavedRe
           {/* Translation Section */}
           {reel.transcript && (
             <div className="pt-6 border-t border-neutral-800">
-              <TranscriptTranslator 
+              <TranscriptTranslator
                 originalText={reel.transcript}
                 preloadedTranslations={reel.translations || {}}
               />
             </div>
           )}
         </div>
+          </>
+        ) : activeTab === 'repurpose' ? (
+          <div className="p-6">
+            {!reel.transcript ? (
+              <div className="text-center py-12">
+                <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-neutral-800 flex items-center justify-center">
+                  <svg className="w-8 h-8 text-neutral-500" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" />
+                  </svg>
+                </div>
+                <h3 className="text-white font-semibold mb-2">No Transcript Available</h3>
+                <p className="text-neutral-400 text-sm">
+                  This reel doesn't have a transcript. Transcripts are required for repurposing content.
+                </p>
+              </div>
+            ) : showRepurposeWizard ? (
+              <RepurposingWizard
+                originalTranscript={reel.transcript}
+                originalCaption={typeof reel.caption === 'string' ? reel.caption : ''}
+                originalHashtags={Array.isArray(reel.hashtags) ? reel.hashtags.filter((tag: any) => typeof tag === 'string') : []}
+                onGenerate={handleRepurpose}
+                onCancel={() => {
+                  setShowRepurposeWizard(false);
+                  setRepurposingError(null);
+                }}
+                isLoading={isRepurposing}
+              />
+            ) : repurposedContent ? (
+              <div className="space-y-6">
+                <div className="flex items-center justify-between">
+                  <h3 className="text-xl font-bold text-white">Repurposed Content</h3>
+                  <button
+                    onClick={() => {
+                      setRepurposedContent(null);
+                      setShowRepurposeWizard(true);
+                    }}
+                    className="px-4 py-2 bg-blue-600 text-white text-sm rounded-lg hover:bg-blue-500 transition-all"
+                  >
+                    Create New
+                  </button>
+                </div>
+
+                {/* Generated Script */}
+                {repurposedContent.script && (
+                  <div>
+                    <div className="flex items-center justify-between mb-3">
+                      <h4 className="text-white font-semibold">Generated Script</h4>
+                      <button
+                        onClick={() => navigator.clipboard.writeText(repurposedContent.script)}
+                        className="px-3 py-1 bg-neutral-800 text-white text-xs rounded hover:bg-neutral-700 transition-all"
+                      >
+                        Copy
+                      </button>
+                    </div>
+                    <div className="bg-neutral-950 border border-neutral-800 rounded-lg p-4">
+                      <p className="text-neutral-300 text-sm whitespace-pre-wrap leading-relaxed">
+                        {repurposedContent.script}
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Generated Caption */}
+                {repurposedContent.caption && (
+                  <div>
+                    <div className="flex items-center justify-between mb-3">
+                      <h4 className="text-white font-semibold">Caption</h4>
+                      <button
+                        onClick={() => navigator.clipboard.writeText(repurposedContent.caption)}
+                        className="px-3 py-1 bg-neutral-800 text-white text-xs rounded hover:bg-neutral-700 transition-all"
+                      >
+                        Copy
+                      </button>
+                    </div>
+                    <div className="bg-neutral-950 border border-neutral-800 rounded-lg p-4">
+                      <p className="text-neutral-300 text-sm whitespace-pre-wrap leading-relaxed">
+                        {repurposedContent.caption}
+                      </p>
+                    </div>
+                  </div>
+                )}
+
+                {/* Hashtags */}
+                {repurposedContent.hashtags && repurposedContent.hashtags.length > 0 && (
+                  <div>
+                    <div className="flex items-center justify-between mb-3">
+                      <h4 className="text-white font-semibold">Suggested Hashtags</h4>
+                      <button
+                        onClick={() => navigator.clipboard.writeText(repurposedContent.hashtags.map((tag: string) => `#${tag}`).join(' '))}
+                        className="px-3 py-1 bg-neutral-800 text-white text-xs rounded hover:bg-neutral-700 transition-all"
+                      >
+                        Copy All
+                      </button>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      {repurposedContent.hashtags.map((tag: string, idx: number) => (
+                        <span key={idx} className="px-3 py-1 bg-blue-900/30 text-blue-300 text-sm rounded-lg border border-blue-800">
+                          #{tag}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Visual Suggestions */}
+                {repurposedContent.visualSuggestions && repurposedContent.visualSuggestions.length > 0 && (
+                  <div>
+                    <h4 className="text-white font-semibold mb-3">Visual Suggestions</h4>
+                    <div className="space-y-3">
+                      {repurposedContent.visualSuggestions.map((suggestion: any, idx: number) => {
+                        // Handle carousel objects
+                        if (typeof suggestion === 'object' && suggestion.slideHeadline) {
+                          return (
+                            <div key={idx} className="bg-neutral-950 border border-neutral-800 rounded-lg p-4">
+                              <p className="text-white font-medium mb-2">Slide {idx + 1}: {suggestion.slideHeadline}</p>
+                              {suggestion.keyPoints && suggestion.keyPoints.length > 0 && (
+                                <ul className="list-disc list-inside text-neutral-300 text-sm space-y-1">
+                                  {suggestion.keyPoints.map((point: string, pointIdx: number) => (
+                                    <li key={pointIdx}>{point}</li>
+                                  ))}
+                                </ul>
+                              )}
+                            </div>
+                          );
+                        }
+                        // Handle string suggestions
+                        return (
+                          <div key={idx} className="bg-neutral-950 border border-neutral-800 rounded-lg p-4">
+                            <p className="text-neutral-300 text-sm">
+                              {typeof suggestion === 'string' ? suggestion : JSON.stringify(suggestion)}
+                            </p>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+
+                {/* Duration */}
+                {repurposedContent.duration && (
+                  <div>
+                    <h4 className="text-white font-semibold mb-2">Recommended Duration</h4>
+                    <p className="text-neutral-300 text-sm">{repurposedContent.duration}</p>
+                  </div>
+                )}
+              </div>
+            ) : (
+              <div className="text-center py-12">
+                <div className="w-16 h-16 mx-auto mb-4 rounded-full bg-gradient-to-br from-blue-600 to-purple-600 flex items-center justify-center">
+                  <svg className="w-8 h-8 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+                  </svg>
+                </div>
+                <h3 className="text-white font-semibold mb-2">Repurpose This Reel</h3>
+                <p className="text-neutral-400 text-sm mb-6">
+                  Transform this content for different platforms, tones, and formats
+                </p>
+                {repurposingError && (
+                  <div className="mb-4 p-3 bg-red-900/20 border border-red-800 rounded-lg text-red-300 text-sm">
+                    {repurposingError}
+                  </div>
+                )}
+                <button
+                  onClick={() => setShowRepurposeWizard(true)}
+                  className="px-6 py-3 bg-gradient-to-r from-blue-600 to-purple-600 text-white font-medium rounded-lg hover:from-blue-500 hover:to-purple-500 transition-all"
+                >
+                  Start Repurposing
+                </button>
+              </div>
+            )}
+          </div>
+        ) : null}
       </div>
     </div>
   );

@@ -7,9 +7,11 @@ import db from '@/lib/instant';
 import TranscriptForm from '@/components/TranscriptForm';
 import TranscriptDisplay from '@/components/TranscriptDisplay';
 import TopReelsDisplay from '@/components/TopReelsDisplay';
+import ProfileStoriesCarousel from '@/components/ProfileStoriesCarousel';
+import ProfileAnalyticsView from '@/components/ProfileAnalyticsView';
 import type { TranscriptResponse, AsyncJobResponse, ErrorResponse, InstagramMetadata, InstagramReel, ProfileTopReelsResponse } from '@/lib/types';
 
-type ViewMode = 'single' | 'profile';
+type ViewMode = 'single' | 'profile' | 'analytics';
 
 export default function Dashboard() {
   const router = useRouter();
@@ -21,6 +23,13 @@ export default function Dashboard() {
   const [viewMode, setViewMode] = useState<ViewMode>('single');
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [selectedProfileForAnalytics, setSelectedProfileForAnalytics] = useState<{ username: string; profileId: string } | null>(null);
+
+  // Fetch analyzed profiles from database
+  const { data: analyzedProfilesData } = db.useQuery({ analyzedProfiles: {} });
+  const analyzedProfiles = user
+    ? (analyzedProfilesData?.analyzedProfiles || []).filter((p: any) => p.userId === user.id)
+    : [];
 
   // Redirect to home if not authenticated
   useEffect(() => {
@@ -53,6 +62,15 @@ export default function Dashboard() {
     throw new Error('Transcript processing timed out. Please try again.');
   };
 
+  const handleProfileClick = (profileId: string, username: string) => {
+    // Find the profile data
+    const profile = analyzedProfiles.find((p: any) => p.id === profileId);
+    if (profile) {
+      setSelectedProfileForAnalytics({ username, profileId });
+      setViewMode('analytics');
+    }
+  };
+
   const handleSubmit = async (url: string) => {
     setLoading(true);
     setError(null);
@@ -60,6 +78,7 @@ export default function Dashboard() {
     setMetadata(null);
     setReelMetadata(null);
     setProfileData(null);
+    setSelectedProfileForAnalytics(null);
 
     try {
       if (isProfileUrl(url)) {
@@ -73,6 +92,21 @@ export default function Dashboard() {
         }
 
         setProfileData(data as ProfileTopReelsResponse);
+
+        // Save analyzed profile to database
+        if (user) {
+          await db.transact([
+            db.tx.analyzedProfiles[db.id()].update({
+              userId: user.id,
+              username: data.username,
+              profileUrl: data.profileUrl,
+              totalReelsAnalyzed: data.totalReelsAnalyzed,
+              topReels: data.topReels,
+              lastAnalyzedAt: Date.now(),
+              createdAt: Date.now(),
+            }),
+          ]);
+        }
       } else {
         setViewMode('single');
 
@@ -168,8 +202,24 @@ export default function Dashboard() {
       </div>
 
       <main className="flex-1 w-full max-w-6xl mx-auto flex flex-col">
+        {/* Profile Stories Carousel - Always visible when you have analyzed profiles */}
+        {analyzedProfiles.length > 0 && !selectedProfileForAnalytics && (
+          <div className="mb-8">
+            <h3 className="text-lg font-semibold text-white mb-4">Analyzed Profiles</h3>
+            <ProfileStoriesCarousel
+              profiles={analyzedProfiles.map((p: any) => ({
+                id: p.id,
+                username: p.username,
+                profilePicture: p.profilePicture,
+                lastAnalyzedAt: p.lastAnalyzedAt,
+              }))}
+              onProfileClick={handleProfileClick}
+            />
+          </div>
+        )}
+
         {/* Show form only when no results */}
-        {!loading && !transcript && !profileData && !error && (
+        {!loading && !transcript && !profileData && !error && !selectedProfileForAnalytics && (
           <div className="flex-1 flex flex-col items-center justify-center">
             <div className="text-center mb-12">
               <h1 className="text-4xl font-bold mb-3 tracking-tight">
@@ -185,7 +235,7 @@ export default function Dashboard() {
         )}
 
         {/* Compact header when results are shown */}
-        {(transcript || profileData || loading || error) && (
+        {(transcript || profileData || loading || error) && !selectedProfileForAnalytics && (
           <div className="mb-6">
             <div className="flex items-center justify-between mb-4">
               <div>
@@ -202,6 +252,7 @@ export default function Dashboard() {
                   setProfileData(null);
                   setError(null);
                   setMetadata(null);
+                  setSelectedProfileForAnalytics(null);
                 }}
                 className="px-4 py-2 bg-neutral-800 text-white text-sm rounded-lg hover:bg-neutral-700 transition-all"
               >
@@ -238,6 +289,27 @@ export default function Dashboard() {
 
         {!loading && viewMode === 'profile' && profileData && (
           <TopReelsDisplay data={profileData} />
+        )}
+
+        {/* Profile Analytics View */}
+        {viewMode === 'analytics' && selectedProfileForAnalytics && (
+          (() => {
+            const profile = analyzedProfiles.find((p: any) => p.id === selectedProfileForAnalytics.profileId);
+            if (!profile || !user) return null;
+
+            return (
+              <ProfileAnalyticsView
+                username={profile.username}
+                topReels={profile.topReels}
+                userId={user.id}
+                profileUrl={profile.profileUrl}
+                onClose={() => {
+                  setSelectedProfileForAnalytics(null);
+                  setViewMode('single');
+                }}
+              />
+            );
+          })()
         )}
       </main>
 
